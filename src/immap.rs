@@ -23,7 +23,7 @@ where
     T: Clone + PartialEq,
 {
     fn default() -> Self {
-        Self(Default::default())
+        Self::new()
     }
 }
 
@@ -32,7 +32,11 @@ where
     T: Clone + PartialEq,
 {
     pub fn new() -> ImMap<T> {
-        Default::default()
+        Self(BTreeMap::new())
+    }
+
+    pub fn single(key: String, value: T) -> ImMap<T> {
+        Self::new().set_inplace(key, value).unwrap()
     }
 
     pub fn from(fields: impl Iterator<Item = (String, T)>) -> Result<ImMap<T>> {

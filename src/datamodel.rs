@@ -32,6 +32,22 @@ pub enum Expr {
     BoundExpr(Scope, Rc<Expr>),
 }
 
+impl ToString for Expr {
+    fn to_string(&self) -> String {
+        match self {
+            Expr::Object(..) => "Object".into(),
+            Expr::Int(..) => "Int".into(),
+            Expr::String(..) => "String".into(),
+            Expr::Var(..) => "Var".into(),
+            Expr::FuncDefIdent(..) => "FuncDefIdent".into(),
+            Expr::FuncDefPattern(..) => "FuncDefPattern".into(),
+            Expr::Let(..) => "Let".into(),
+            Expr::FuncCall(..) => "FuncCall".into(),
+            Expr::BoundExpr(..) => "BoundExpr".into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Scope {
     vars: ImMap<Rc<Expr>>,
@@ -67,48 +83,39 @@ impl Scope {
                 }
                 Ok(Expr::BoundExpr(vars.into(), target_expr.clone()).into())
             }
-            Expr::BoundExpr(scope, subexpr) => match subexpr.as_ref() {
-                Expr::Object(im_map) => Ok(Expr::Object(
-                    im_map.map(|val| Expr::BoundExpr(scope.clone(), val.clone()).into()),
-                )
-                .into()),
-                Expr::Var(name) => Ok(scope.vars.get(name).unwrap()),
-                Expr::FuncDefIdent(var, expr) => {
-                    let new_scope = scope.vars.unset(var.as_str());
+            Expr::BoundExpr(bound_scope, bound_expr) => match bound_expr.as_ref() {
+                Expr::Object(im_map) => {
+                    Ok(Expr::Object(im_map.map(|val| bound_scope.bind(val.clone()).into())).into())
+                }
+                Expr::FuncDefIdent(arg_name, func_expr) => {
+                    let new_scope: Scope = bound_scope.vars.unset(arg_name.as_str()).into();
                     Ok(Expr::FuncDefIdent(
-                        var.clone(),
-                        Expr::BoundExpr(new_scope.into(), expr.clone()).into(),
+                        arg_name.clone(),
+                        new_scope.bind(func_expr.clone()).into(),
                     )
                     .into())
                 }
                 Expr::FuncDefPattern(items, expr) => {
-                    let mut new_scope = scope.clone();
+                    let mut new_scope = bound_scope.clone();
                     for item in items {
                         new_scope.vars = new_scope.vars.unset_inplace(item);
                     }
-                    Ok(Expr::FuncDefPattern(
-                        items.clone(),
-                        Expr::BoundExpr(new_scope, expr.clone()).into(),
+                    Ok(
+                        Expr::FuncDefPattern(items.clone(), new_scope.bind(expr.clone()).into())
+                            .into(),
                     )
-                    .into())
                 }
-                Expr::Let(items, expr) => todo!(),
-                Expr::FuncCall(func_name, expr) => todo!(),
-                Expr::BoundExpr(scope, expr) => todo!(),
-                _ => Ok(subexpr.clone()),
+                _ => bound_scope.resolve(bound_expr.clone()),
             },
             Expr::Var(name) => match self.vars.get(name) {
                 Some(value) => Ok(value),
-                None => Err(Error::ResolvError("Unknown variable".into())),
+                None => Err(Error::ResolvError(format!("Unknown variable {}", name))),
             },
-            Expr::FuncCall(func_name, expr) => match self.vars.get(func_name) {
-                Some(var) => match var.as_ref() {
-                    Expr::FuncDefIdent(var, func_expr) => {
-                        let new_scope: Scope = ImMap::new()
-                            .set_inplace(var.clone(), expr.clone())
-                            .unwrap()
-                            .into();
-
+            Expr::FuncCall(func_name, arg_expr) => match self.vars.get(func_name) {
+                Some(func) => match func.as_ref() {
+                    Expr::FuncDefIdent(arg_name, func_expr) => {
+                        let new_scope: Scope =
+                            ImMap::single(arg_name.clone(), self.bind(arg_expr.clone())).into();
                         Ok(Expr::BoundExpr(new_scope, func_expr.clone()).into())
                     }
                     _ => Err(Error::ResolvError("Variable is not a function".into())),
@@ -118,7 +125,10 @@ impl Scope {
                     func_name
                 ))),
             },
-            _ => Err(ResolvError("Resolving invalid type".into())),
+            _ => Err(ResolvError(format!(
+                "Resolving invalid type {}",
+                expr.to_string()
+            ))),
         }
     }
 
@@ -138,6 +148,10 @@ impl Scope {
         } else {
             Ok(expr)
         }
+    }
+
+    fn bind(&self, expr: Rc<Expr>) -> Rc<Expr> {
+        Expr::BoundExpr(self.clone(), expr).into()
     }
 
     pub fn get_item(&self, expr: Rc<Expr>, item: &str) -> Result<Rc<Expr>> {
@@ -255,7 +269,10 @@ mod tests {
         .unwrap();
         let scope = Scope::default();
         let value = scope.resolve(expr).unwrap_err();
-        assert_eq!(value, Error::ResolvError("Unknown variable".into()));
+        assert_eq!(
+            value,
+            Error::ResolvError("Unknown variable invalid_var".into())
+        );
     }
 
     #[test]
@@ -288,11 +305,45 @@ mod tests {
     }
 
     #[test]
+    fn test_func_call_var_arg() {
+        let func_var = DnjParser::parse_str("var: var").unwrap();
+        let arg_var = DnjParser::parse_str("32").unwrap();
+        let call = DnjParser::parse_str("func arg").unwrap();
+        let scope: Scope =
+            ImMap::from(vec![("func".into(), func_var), ("arg".into(), arg_var)].into_iter())
+                .unwrap()
+                .into();
+        let value = scope.resolve(call).unwrap();
+        assert_eq!(*value, Expr::Int(32));
+    }
+
+    #[test]
     fn test_func_call_resolved() {
         assert_dnj_value! {
             r#"
                 let
                     a = 12;
+                    func = test: {
+                        var = test;
+                    };
+                in
+                {
+                    stuff = func a;
+                }
+            "#,
+            vec!["stuff", "var"],
+            Expr::Int(12)
+        }
+    }
+
+    #[test]
+    fn test_func_call_resolved_stacked_let() {
+        assert_dnj_value! {
+            r#"
+                let
+                    a = 12;
+                in
+                let
                     func = test: {
                         var = test;
                     };
