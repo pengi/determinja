@@ -51,6 +51,12 @@ impl Default for Scope {
     }
 }
 
+impl From<ImMap<Rc<Expr>>> for Scope {
+    fn from(vars: ImMap<Rc<Expr>>) -> Self {
+        Self { vars }
+    }
+}
+
 impl Scope {
     fn resolve_once(&self, expr: Rc<Expr>) -> Result<Rc<Expr>> {
         match expr.as_ref() {
@@ -59,7 +65,7 @@ impl Scope {
                 for (field_name, field_expr) in fields {
                     vars = vars.set_inplace(field_name.clone(), field_expr.clone())?;
                 }
-                Ok(Expr::BoundExpr(Scope { vars }, target_expr.clone()).into())
+                Ok(Expr::BoundExpr(vars.into(), target_expr.clone()).into())
             }
             Expr::BoundExpr(scope, subexpr) => match subexpr.as_ref() {
                 Expr::Object(im_map) => Ok(Expr::Object(
@@ -67,10 +73,27 @@ impl Scope {
                 )
                 .into()),
                 Expr::Var(name) => Ok(scope.vars.get(name).unwrap()),
-                Expr::FuncDefIdent(_, expr) => todo!(),
-                Expr::FuncDefPattern(items, expr) => todo!(),
+                Expr::FuncDefIdent(var, expr) => {
+                    let new_scope = scope.vars.unset(var.as_str());
+                    Ok(Expr::FuncDefIdent(
+                        var.clone(),
+                        Expr::BoundExpr(new_scope.into(), expr.clone()).into(),
+                    )
+                    .into())
+                }
+                Expr::FuncDefPattern(items, expr) => {
+                    let mut new_scope = scope.clone();
+                    for item in items {
+                        new_scope.vars = new_scope.vars.unset_inplace(item);
+                    }
+                    Ok(Expr::FuncDefPattern(
+                        items.clone(),
+                        Expr::BoundExpr(new_scope, expr.clone()).into(),
+                    )
+                    .into())
+                }
                 Expr::Let(items, expr) => todo!(),
-                Expr::FuncCall(_, expr) => todo!(),
+                Expr::FuncCall(func_name, expr) => todo!(),
                 Expr::BoundExpr(scope, expr) => todo!(),
                 _ => Ok(subexpr.clone()),
             },
@@ -78,21 +101,38 @@ impl Scope {
                 Some(value) => Ok(value),
                 None => Err(Error::ResolvError("Unknown variable".into())),
             },
+            Expr::FuncCall(func_name, expr) => match self.vars.get(func_name) {
+                Some(var) => match var.as_ref() {
+                    Expr::FuncDefIdent(var, func_expr) => {
+                        let new_scope: Scope = ImMap::new()
+                            .set_inplace(var.clone(), expr.clone())
+                            .unwrap()
+                            .into();
+
+                        Ok(Expr::BoundExpr(new_scope, func_expr.clone()).into())
+                    }
+                    _ => Err(Error::ResolvError("Variable is not a function".into())),
+                },
+                None => Err(Error::ResolvError(format!(
+                    "Unknown function name '{}'",
+                    func_name
+                ))),
+            },
             _ => Err(ResolvError("Resolving invalid type".into())),
         }
     }
 
     pub fn resolve(&self, expr: Rc<Expr>) -> Result<Rc<Expr>> {
         if match expr.as_ref() {
-            Expr::Object(im_map) => false,
-            Expr::Int(_) => false,
-            Expr::String(_) => false,
-            Expr::Var(_) => true,
-            Expr::FuncDefIdent(_, expr) => false,
-            Expr::FuncDefPattern(items, expr) => false,
-            Expr::Let(items, expr) => true,
-            Expr::FuncCall(_, expr) => true,
-            Expr::BoundExpr(scope, expr) => true,
+            Expr::Object(..) => false,
+            Expr::Int(..) => false,
+            Expr::String(..) => false,
+            Expr::Var(..) => true,
+            Expr::FuncDefIdent(..) => false,
+            Expr::FuncDefPattern(..) => false,
+            Expr::Let(..) => true,
+            Expr::FuncCall(..) => true,
+            Expr::BoundExpr(..) => true,
         } {
             self.resolve(self.resolve_once(expr)?)
         } else {
@@ -101,17 +141,17 @@ impl Scope {
     }
 
     pub fn get_item(&self, expr: Rc<Expr>, item: &str) -> Result<Rc<Expr>> {
-        match expr.as_ref() {
+        let expr = self.resolve(expr)?;
+        let out = match expr.as_ref() {
             Expr::Object(fields) => {
                 let field = fields
                     .get(item)
                     .ok_or_else(|| Error::ResolvError("field not found".into()))?;
                 Ok(field.clone())
             }
-            Expr::Let(_, _) => self.get_item(self.resolve_once(expr)?, item),
-            Expr::BoundExpr(_, _) => self.get_item(self.resolve_once(expr)?, item),
             _ => Err(Error::ResolvError("get_item resolving".into())),
-        }
+        }?;
+        self.resolve(out)
     }
 
     pub fn get_path<'a>(
@@ -121,8 +161,18 @@ impl Scope {
     ) -> Result<Rc<Expr>> {
         let mut cur = expr;
         for item in path {
-            cur = self.get_item(cur, item)?;
+            cur = self.resolve(cur)?;
+            cur = match cur.as_ref() {
+                Expr::Object(fields) => {
+                    let field = fields
+                        .get(item)
+                        .ok_or_else(|| Error::ResolvError("field not found".into()))?;
+                    Ok(field.clone())
+                }
+                _ => Err(Error::ResolvError("get_item resolving".into())),
+            }?;
         }
+        cur = self.resolve(cur)?;
         Ok(cur)
     }
 }
@@ -131,6 +181,15 @@ impl Scope {
 mod tests {
     use super::*;
     use crate::grammar::DnjParser;
+
+    macro_rules! assert_dnj_value {
+        ($code:expr, $path:expr, $value:expr) => {
+            let expr = DnjParser::parse_str($code).unwrap();
+            let scope = Scope::default();
+            let value = scope.get_path(expr, $path.into_iter()).unwrap();
+            assert_eq!(value, $value.into());
+        };
+    }
 
     #[test]
     fn test_eval() {
@@ -200,8 +259,8 @@ mod tests {
     }
 
     #[test]
-    fn test_x() {
-        let expr = DnjParser::parse_str(
+    fn test_let_set_var() {
+        assert_dnj_value! {
             r#"
                 let
                     a = 12;
@@ -210,10 +269,40 @@ mod tests {
                     stuff = a;
                 }
             "#,
-        )
-        .unwrap();
-        let scope = Scope::default();
-        let value = scope.resolve(scope.get_item(expr, "stuff").unwrap()).unwrap();
-        assert_eq!(*value, Expr::Int(12));
+            vec!["stuff"],
+            Expr::Int(12)
+        }
+    }
+
+    #[test]
+    fn test_func_call() {
+        let func_a = DnjParser::parse_str("var: 13").unwrap();
+        let func_b = DnjParser::parse_str("var: 42").unwrap();
+        let call = DnjParser::parse_str("func_b 32").unwrap();
+        let scope: Scope =
+            ImMap::from(vec![("func_a".into(), func_a), ("func_b".into(), func_b)].into_iter())
+                .unwrap()
+                .into();
+        let value = scope.resolve(call).unwrap();
+        assert_eq!(*value, Expr::Int(42));
+    }
+
+    #[test]
+    fn test_func_call_resolved() {
+        assert_dnj_value! {
+            r#"
+                let
+                    a = 12;
+                    func = test: {
+                        var = test;
+                    };
+                in
+                {
+                    stuff = func a;
+                }
+            "#,
+            vec!["stuff", "var"],
+            Expr::Int(12)
+        }
     }
 }

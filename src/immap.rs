@@ -58,6 +58,18 @@ where
         Some(ImMap(map))
     }
 
+    pub fn unset(&self, key: &str) -> ImMap<T> {
+        let mut map = self.0.clone();
+        let _ = map.remove(key);
+        ImMap(map)
+    }
+
+    pub fn unset_inplace(self, key: &str) -> ImMap<T> {
+        let mut map = self;
+        map.0.remove(key);
+        map
+    }
+
     pub fn get(&self, key: &str) -> Option<T> {
         self.0.get(key).cloned()
     }
