@@ -116,9 +116,23 @@ impl Scope {
                     Expr::FuncDefIdent(arg_name, func_expr) => {
                         let new_scope: Scope =
                             ImMap::single(arg_name.clone(), self.bind(arg_expr.clone())).into();
-                        Ok(Expr::BoundExpr(new_scope, func_expr.clone()).into())
+                        Ok(new_scope.bind(func_expr.clone()))
                     }
-                    _ => Err(Error::ResolvError("Variable is not a function".into())),
+                    Expr::FuncDefPattern(arg_names, func_expr) => {
+                        let mut new_vars = ImMap::new();
+                        for arg_name in arg_names {
+                            let arg_value = self.get_item(arg_expr.clone(), arg_name)?;
+                            new_vars = new_vars.set_inplace(arg_name.clone(), arg_value)?;
+                        }
+                        // TODO: How to handle extra arguments?
+                        let new_scope: Scope = new_vars.into();
+                        Ok(new_scope.bind(func_expr.clone()))
+                    }
+                    _ => Err(Error::ResolvError(format!(
+                        "called {}, which is a {}",
+                        func_name,
+                        func.to_string()
+                    ))),
                 },
                 None => Err(Error::ResolvError(format!(
                     "Unknown function name '{}'",
@@ -354,6 +368,29 @@ mod tests {
             "#,
             vec!["stuff", "var"],
             Expr::Int(12)
+        }
+    }
+
+    #[test]
+    fn test_func_call_pattern() {
+        assert_dnj_value! {
+            r#"
+                let
+                    a = 12;
+                    b = 13;
+                    func = { a, b }: {
+                        var = b;
+                    };
+                in
+                {
+                    stuff = func {
+                        a = 15;
+                        b = 74;
+                    };
+                }
+            "#,
+            vec!["stuff", "var"],
+            Expr::Int(74)
         }
     }
 }
