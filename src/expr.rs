@@ -52,3 +52,12 @@ impl Display for Expr {
         }
     }
 }
+
+impl Expr {
+    pub fn get_item(&self, item: &str) -> Option<Rc<Expr>> {
+        match self {
+            Expr::Object(vars) => vars.get(item),
+            _ => None,
+        }
+    }
+}
