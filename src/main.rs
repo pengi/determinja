@@ -1,8 +1,10 @@
 pub mod error;
 pub mod expr;
-mod grammar;
+pub mod grammar;
 pub mod immap;
+pub mod value;
 
+use value::Value;
 use clap::Parser;
 use error::Result;
 use grammar::DnjParser;
@@ -19,7 +21,7 @@ struct Args {
 }
 
 fn run(args: Args) -> Result<()> {
-    let expr: Expr = DnjParser::parse_file(args.input)?.bind(ExprSet::new());
+    let expr: Expr<Value> = DnjParser::parse_file(args.input)?.bind(ExprSet::new());
     println!("input: {:#}", expr);
     let resolved = expr.eval().unwrap();
     println!("output: {:#}", resolved);

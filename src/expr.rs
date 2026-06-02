@@ -1,4 +1,7 @@
-use std::{fmt::Display, rc::Rc};
+use std::{
+    fmt::{Debug, Display},
+    rc::Rc,
+};
 
 use crate::immap::ImMap;
 
@@ -7,13 +10,16 @@ use crate::immap::ImMap;
  */
 
 #[derive(Debug, PartialEq)]
-pub enum Error {
-    ScopeError(String, ExprSet),
+pub enum Error<T: Clone + PartialEq + Display> {
+    ScopeError(String, ExprSet<T>),
     EvalError(String),
     DupKey(String),
 }
 
-impl From<crate::immap::Error> for Error {
+impl<T> From<crate::immap::Error> for Error<T>
+where
+    T: Clone + PartialEq + Display,
+{
     fn from(value: crate::immap::Error) -> Self {
         match value {
             crate::immap::Error::DupKey(key) => Error::DupKey(key),
@@ -21,48 +27,57 @@ impl From<crate::immap::Error> for Error {
     }
 }
 
-type Result<T> = std::result::Result<T, Error>;
+type Result<RT, ET> = std::result::Result<RT, Error<ET>>;
 
 /*
  * Types
  */
 
-pub type ExprSet = ImMap<Expr>;
+pub type ExprSet<T> = ImMap<Expr<T>>;
 
 #[derive(Debug, PartialEq)]
-pub enum ExprType {
-    Object(ExprSet),
-    Int(i64),
-    String(String),
+pub enum ExprType<T>
+where
+    T: Clone + PartialEq + Display,
+{
+    Object(ExprSet<T>),
+    Value(T),
     Var(String),
-    FuncDefIdent(String, Expr),
-    FuncDefPattern(Vec<String>, Expr),
-    Let(Vec<(String, Expr)>, Expr),
-    FuncCall(String, Expr),
-    BoundExpr(ExprSet, Expr),
+    FuncDefIdent(String, Expr<T>),
+    FuncDefPattern(Vec<String>, Expr<T>),
+    Let(Vec<(String, Expr<T>)>, Expr<T>),
+    FuncCall(String, Expr<T>),
+    BoundExpr(ExprSet<T>, Expr<T>),
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Expr(Rc<ExprType>);
+pub struct Expr<T>(Rc<ExprType<T>>)
+where
+    T: Clone + PartialEq + Display;
 
-impl From<ExprType> for Expr {
-    fn from(value: ExprType) -> Self {
+impl<T> From<ExprType<T>> for Expr<T>
+where
+    T: Clone + PartialEq + Display,
+{
+    fn from(value: ExprType<T>) -> Self {
         Expr(value.into())
     }
 }
 
-impl Display for ExprType {
+impl<T> Display for ExprType<T>
+where
+    T: Clone + PartialEq + Display,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ExprType::Object(im_map) => im_map.fmt(f),
-            ExprType::Int(val) => val.fmt(f),
-            ExprType::String(val) => write!(f, "{:?}", val),
-            ExprType::Var(val) => val.fmt(f),
+            ExprType::Value(val) => val.fmt(f),
+            ExprType::Var(val) => Display::fmt(&val, f),
             ExprType::FuncDefIdent(name, expr) => write!(f, "{}: {}", name, expr),
             ExprType::FuncDefPattern(items, expr) => {
                 f.write_str("{")?;
                 for item in items {
-                    item.fmt(f)?;
+                    Display::fmt(&item, f)?;
                     f.write_str(", ")?;
                 }
                 f.write_str("...}: ")?;
@@ -72,9 +87,9 @@ impl Display for ExprType {
             ExprType::Let(items, expr) => {
                 f.write_str("let ")?;
                 for (var_name, var_expr) in items {
-                    var_name.fmt(f)?;
+                    std::fmt::Display::fmt(&var_name, f)?;
                     f.write_str("=")?;
-                    var_expr.fmt(f)?;
+                    std::fmt::Display::fmt(&var_expr, f)?;
                     f.write_str("; ")?;
                 }
                 f.write_str("in ")?;
@@ -87,21 +102,27 @@ impl Display for ExprType {
     }
 }
 
-impl Display for Expr {
+impl<T> Display for Expr<T>
+where
+    T: Clone + PartialEq + Display,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl Expr {
-    pub fn get_item(&self, item: &str) -> Option<Expr> {
+impl<T> Expr<T>
+where
+    T: Clone + PartialEq + Display + Debug,
+{
+    pub fn get_item(&self, item: &str) -> Option<Expr<T>> {
         match self.0.as_ref() {
             ExprType::Object(vars) => vars.get(item),
             _ => None,
         }
     }
 
-    fn resolve_once(&self) -> Result<Expr> {
+    fn resolve_once(&self) -> Result<Expr<T>, T> {
         match self.0.as_ref() {
             ExprType::BoundExpr(varspace, bound_expr) => match bound_expr.0.as_ref() {
                 ExprType::Object(fields) => Ok(ExprType::Object(
@@ -109,7 +130,7 @@ impl Expr {
                 )
                 .into()),
                 ExprType::Let(fields, target_expr) => {
-                    let mut vars: ExprSet = varspace.clone();
+                    let mut vars: ExprSet<T> = varspace.clone();
                     for (field_name, field_expr) in fields {
                         let field_vars = vars.clone();
                         vars = vars.set(
@@ -197,8 +218,7 @@ impl Expr {
                         varspace.clone(),
                     )),
                 },
-                ExprType::Int(..) => Ok(bound_expr.clone()),
-                ExprType::String(..) => Ok(bound_expr.clone()),
+                ExprType::Value(..) => Ok(bound_expr.clone()),
                 ExprType::BoundExpr(_inner_vars, _expr) => todo!(),
             },
             _ => Err(Error::EvalError(format!(
@@ -208,12 +228,11 @@ impl Expr {
         }
     }
 
-    pub fn resolve(&self) -> Result<Expr> {
-        let mut expr: Expr = self.clone();
+    pub fn resolve(&self) -> Result<Expr<T>, T> {
+        let mut expr: Expr<T> = self.clone();
         while match expr.0.as_ref() {
             ExprType::Object(..) => false,
-            ExprType::Int(..) => false,
-            ExprType::String(..) => false,
+            ExprType::Value(..) => false,
             ExprType::Var(..) => true,
             ExprType::FuncDefIdent(..) => false,
             ExprType::FuncDefPattern(..) => false,
@@ -226,17 +245,17 @@ impl Expr {
         Ok(expr)
     }
 
-    pub fn eval(&self) -> Result<Expr> {
+    pub fn eval(&self) -> Result<Expr<T>, T> {
         let res = self.resolve()?;
         match res.0.as_ref() {
-            ExprType::Object(im_map) => {
-                Ok(ExprType::Object(im_map.map(|e| e.eval().unwrap())).into())
+            ExprType::Object(fields) => {
+                Ok(ExprType::Object(fields.map(|e| e.eval().unwrap())).into())
             }
             _ => Ok(res),
         }
     }
 
-    pub fn bind(self, vars: ExprSet) -> Expr {
+    pub fn bind(self, vars: ExprSet<T>) -> Expr<T> {
         ExprType::BoundExpr(vars, self).into()
     }
 }
@@ -244,9 +263,34 @@ impl Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grammar::DnjParser;
+    use crate::grammar::{DnjParser, ParsableValue};
 
-    fn eval(code: &str) -> Expr {
+    #[derive(PartialEq, Clone, Debug)]
+    enum TestValue {
+        Int(i64),
+        String(String),
+    }
+
+    impl Display for TestValue {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                TestValue::Int(v) => std::fmt::Display::fmt(v, f),
+                TestValue::String(v) => std::fmt::Display::fmt(v, f),
+            }
+        }
+    }
+
+    impl ParsableValue for TestValue {
+        fn parse_int(value: impl ToString) -> Option<Self> {
+            Some(TestValue::Int(value.to_string().parse().unwrap()))
+        }
+
+        fn parse_string(value: impl ToString) -> Option<Self> {
+            Some(TestValue::String(value.to_string()))
+        }
+    }
+
+    fn eval(code: &str) -> Expr<TestValue> {
         DnjParser::parse_str(code)
             .unwrap()
             .bind(ExprSet::new())
@@ -256,7 +300,7 @@ mod tests {
 
     #[test]
     fn test_resolve() {
-        let expr = DnjParser::parse_str(
+        let expr: Expr<TestValue> = DnjParser::parse_str(
             r#"
                 {
                     stuff = "hello";
@@ -266,7 +310,7 @@ mod tests {
         )
         .unwrap();
         let value = expr.get_item("stuff").unwrap();
-        assert_eq!(*value.0, ExprType::String("hello".into()));
+        assert_eq!(*value.0, ExprType::Value(TestValue::String("hello".into())));
     }
 
     #[test]
@@ -277,7 +321,7 @@ mod tests {
                 {
                     stuff = "hello";
                     something = {
-                        inner = "deep";
+                        inner = 55;
                     };
                 }
             "#,
@@ -288,7 +332,7 @@ mod tests {
             .unwrap()
             .get_item("inner")
             .unwrap();
-        assert_eq!(*value.0, ExprType::String("deep".into()));
+        assert_eq!(*value.0, ExprType::Value(TestValue::Int(55)));
     }
 
     #[test]
@@ -297,7 +341,7 @@ mod tests {
             r#"
                 let
                     a = 12;
-                    b = "hello";
+                    b = 75;
                 in
                 b
             "#,
@@ -306,12 +350,12 @@ mod tests {
         .bind(ExprSet::new())
         .resolve()
         .unwrap();
-        assert_eq!(*value.0, ExprType::String("hello".into()));
+        assert_eq!(*value.0, ExprType::Value(TestValue::Int(75)));
     }
 
     #[test]
     fn test_invalid_var() {
-        let expr = DnjParser::parse_str(
+        let expr: Expr<TestValue> = DnjParser::parse_str(
             r#"
                 invalid_var
             "#,
@@ -364,8 +408,8 @@ mod tests {
         let varscope =
             ExprSet::from(vec![("func_a".into(), func_a), ("func_b".into(), func_b)].into_iter())
                 .unwrap();
-        let value: Expr = call.bind(varscope).resolve().unwrap();
-        assert_eq!(*value.0, ExprType::Int(42));
+        let value: Expr<TestValue> = call.bind(varscope).resolve().unwrap();
+        assert_eq!(*value.0, ExprType::Value(TestValue::Int(42)));
     }
 
     #[test]
@@ -376,8 +420,8 @@ mod tests {
         let varscope =
             ExprSet::from(vec![("func".into(), func_var), ("arg".into(), arg_var)].into_iter())
                 .unwrap();
-        let value: Expr = call.bind(varscope).resolve().unwrap();
-        assert_eq!(*value.0, ExprType::Int(32));
+        let value: Expr<TestValue> = call.bind(varscope).resolve().unwrap();
+        assert_eq!(*value.0, ExprType::Value(TestValue::Int(32)));
     }
 
     #[test]
