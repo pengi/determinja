@@ -38,28 +38,28 @@ impl ExprOps for Value {
     fn op_add(lhs: &Self, rhs: &Self) -> Result<Self> {
         match (lhs, rhs) {
             (Value::Int(lhs), Value::Int(rhs)) => Ok(Value::Int(lhs + rhs)),
-            _ => Err(Error::Type(format!("cant add {} and {}", lhs, rhs))),
+            _ => Err(Error::Type(format!("can't add {} and {}", lhs, rhs))),
         }
     }
 
     fn op_sub(lhs: &Self, rhs: &Self) -> Result<Self> {
         match (lhs, rhs) {
             (Value::Int(lhs), Value::Int(rhs)) => Ok(Value::Int(lhs - rhs)),
-            _ => Err(Error::Type(format!("cant subtract {} and {}", lhs, rhs))),
+            _ => Err(Error::Type(format!("can't subtract {} and {}", lhs, rhs))),
         }
     }
 
     fn op_mult(lhs: &Self, rhs: &Self) -> Result<Self> {
         match (lhs, rhs) {
             (Value::Int(lhs), Value::Int(rhs)) => Ok(Value::Int(lhs * rhs)),
-            _ => Err(Error::Type(format!("cant multiply {} and {}", lhs, rhs))),
+            _ => Err(Error::Type(format!("can't multiply {} and {}", lhs, rhs))),
         }
     }
 
     fn op_div(lhs: &Self, rhs: &Self) -> Result<Self> {
         match (lhs, rhs) {
             (Value::Int(lhs), Value::Int(rhs)) => Ok(Value::Int(lhs / rhs)),
-            _ => Err(Error::Type(format!("cant divide {} and {}", lhs, rhs))),
+            _ => Err(Error::Type(format!("can't divide {} and {}", lhs, rhs))),
         }
     }
 
@@ -67,7 +67,7 @@ impl ExprOps for Value {
         match (lhs, rhs) {
             (Value::Int(lhs), Value::Int(rhs)) => Ok(Value::Bool(lhs < rhs)),
             (Value::String(lhs), Value::String(rhs)) => Ok(Value::Bool(lhs < rhs)),
-            _ => Err(Error::Type(format!("cant compare {} and {}", lhs, rhs))),
+            _ => Err(Error::Type(format!("can't compare {} and {}", lhs, rhs))),
         }
     }
 
@@ -75,7 +75,7 @@ impl ExprOps for Value {
         match (lhs, rhs) {
             (Value::Int(lhs), Value::Int(rhs)) => Ok(Value::Bool(lhs <= rhs)),
             (Value::String(lhs), Value::String(rhs)) => Ok(Value::Bool(lhs <= rhs)),
-            _ => Err(Error::Type(format!("cant compare {} and {}", lhs, rhs))),
+            _ => Err(Error::Type(format!("can't compare {} and {}", lhs, rhs))),
         }
     }
 
@@ -83,7 +83,7 @@ impl ExprOps for Value {
         match (lhs, rhs) {
             (Value::Int(lhs), Value::Int(rhs)) => Ok(Value::Bool(lhs > rhs)),
             (Value::String(lhs), Value::String(rhs)) => Ok(Value::Bool(lhs > rhs)),
-            _ => Err(Error::Type(format!("cant compare {} and {}", lhs, rhs))),
+            _ => Err(Error::Type(format!("can't compare {} and {}", lhs, rhs))),
         }
     }
 
@@ -91,7 +91,7 @@ impl ExprOps for Value {
         match (lhs, rhs) {
             (Value::Int(lhs), Value::Int(rhs)) => Ok(Value::Bool(lhs >= rhs)),
             (Value::String(lhs), Value::String(rhs)) => Ok(Value::Bool(lhs >= rhs)),
-            _ => Err(Error::Type(format!("cant compare {} and {}", lhs, rhs))),
+            _ => Err(Error::Type(format!("can't compare {} and {}", lhs, rhs))),
         }
     }
 

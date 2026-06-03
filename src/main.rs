@@ -23,9 +23,9 @@ struct Args {
 }
 
 fn run(args: Args) -> Result<()> {
-    let expr: Expr<Value> = parse_file(args.input).unwrap().bind(ExprSet::new());
+    let expr: Expr<Value> = parse_file(args.input)?.bind(ExprSet::new());
     println!("input: {:#}", expr);
-    let resolved = expr.eval().unwrap();
+    let resolved = expr.eval()?;
     println!("output: {:#}", resolved);
     Ok(())
 }
@@ -37,7 +37,6 @@ fn main() {
         }
         Err(err) => {
             println!("{}", err);
-            println!("{:#?}", err);
             exit(1);
         }
     }

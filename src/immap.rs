@@ -97,4 +97,18 @@ where
     {
         ImMap::from(self.0.iter().map(|(name, value)| (name.clone(), f(value)))).unwrap()
     }
+
+    pub fn try_map<B, F, E>(&self, f: F) -> std::result::Result<ImMap<B>, E>
+    where
+        F: Fn(&T) -> std::result::Result<B, E>,
+        B: Display + Clone + PartialEq,
+    {
+        Ok(ImMap::from(
+            self.0
+                .iter()
+                .map(|(name, value)| Ok((name.clone(), f(&value)?)))
+                .collect::<std::result::Result<BTreeMap<String, B>, E>>()?,
+        )
+        .unwrap())
+    }
 }

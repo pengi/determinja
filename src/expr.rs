@@ -37,17 +37,27 @@ use ops::ExprOps;
  */
 
 #[derive(Debug, PartialEq)]
-pub enum Error<T: Clone + PartialEq + Display + ExprOps> {
-    ScopeError(String, ExprSet<T>),
+pub enum Error {
+    ScopeError(String),
     EvalError(String),
     TypeError(String),
     DupKey(String),
 }
 
-impl<T> From<crate::immap::Error> for Error<T>
-where
-    T: Clone + PartialEq + Display + ExprOps,
-{
+impl std::error::Error for Error {}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::ScopeError(msg) => write!(f, "ScopeError: {}", msg),
+            Error::EvalError(msg) => write!(f, "EvalError: {}", msg),
+            Error::TypeError(msg) => write!(f, "TypeError: {}", msg),
+            Error::DupKey(msg) => write!(f, "DupKey: {}", msg),
+        }
+    }
+}
+
+impl From<crate::immap::Error> for Error {
     fn from(value: crate::immap::Error) -> Self {
         match value {
             crate::immap::Error::DupKey(key) => Error::DupKey(key),
@@ -55,10 +65,7 @@ where
     }
 }
 
-impl<T> From<ops::Error> for Error<T>
-where
-    T: Clone + PartialEq + Display + ExprOps,
-{
+impl From<ops::Error> for Error {
     fn from(value: ops::Error) -> Self {
         match value {
             ops::Error::Type(msg) => Error::TypeError(msg),
@@ -66,7 +73,7 @@ where
     }
 }
 
-type Result<RT, ET> = std::result::Result<RT, Error<ET>>;
+type Result<RT> = std::result::Result<RT, Error>;
 
 /*
  * Types
@@ -180,7 +187,7 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ExprType::Object(im_map) => im_map.fmt(f),
+            ExprType::Object(varscope) => varscope.fmt(f),
             ExprType::Value(val) => val.fmt(f),
             ExprType::Var(val) => Display::fmt(&val, f),
             ExprType::UnOp(op, expr) => {
@@ -238,7 +245,7 @@ where
         }
     }
 
-    fn resolve_once(&self) -> Result<Expr<T>, T> {
+    fn resolve_once(&self) -> Result<Expr<T>> {
         match self.0.as_ref() {
             ExprType::BoundExpr(varspace, bound_expr) => match bound_expr.0.as_ref() {
                 ExprType::Object(fields) => Ok(ExprType::Object(
@@ -277,10 +284,7 @@ where
                 }
                 ExprType::Var(name) => match varspace.get(name) {
                     Some(value) => Ok(value),
-                    None => Err(Error::ScopeError(
-                        format!("Unknown variable {}", name),
-                        varspace.clone(),
-                    )),
+                    None => Err(Error::ScopeError(format!("Unknown variable {}", name))),
                 },
                 ExprType::UnOp(op, expr) => {
                     Ok(ExprType::UnOp(*op, expr.clone().bind(varspace.clone())).into())
@@ -309,22 +313,19 @@ where
                                 for arg_name in arg_names {
                                     let arg_value = match arg_expr.get_item(arg_name) {
                                         Some(x) => Ok(x),
-                                        None => Err(Error::ScopeError(
-                                            format!(
-                                                "called {}, no attr {} found",
-                                                func_name, arg_name
-                                            ),
-                                            varspace.clone(),
-                                        )),
+                                        None => Err(Error::ScopeError(format!(
+                                            "called {}, no attr {} found",
+                                            func_name, arg_name
+                                        ))),
                                     }?;
                                     new_vars = new_vars.set(arg_name.clone(), arg_value)?;
                                 }
                                 Ok((new_vars, func_expr))
                             }
-                            _ => Err(Error::ScopeError(
-                                format!("called {}, which is a {}", func_name, func),
-                                varspace.clone(),
-                            )),
+                            _ => Err(Error::ScopeError(format!(
+                                "called {}, which is a {}",
+                                func_name, func
+                            ))),
                         }?;
 
                         // If function contains a bound scope, it should still apply,
@@ -338,10 +339,10 @@ where
                             _ => Ok(ExprType::BoundExpr(args, func_expr.clone()).into()),
                         }
                     }
-                    None => Err(Error::ScopeError(
-                        format!("Unknown function name '{}'", func_name),
-                        varspace.clone(),
-                    )),
+                    None => Err(Error::ScopeError(format!(
+                        "Unknown function name '{}'",
+                        func_name
+                    ))),
                 },
                 ExprType::Value(..) => Ok(bound_expr.clone()),
                 ExprType::BoundExpr(inner_vars, inner_expr) => Ok(ExprType::BoundExpr(
@@ -429,7 +430,7 @@ where
         }
     }
 
-    pub fn resolve(&self) -> Result<Expr<T>, T> {
+    pub fn resolve(&self) -> Result<Expr<T>> {
         let mut expr: Expr<T> = self.clone();
         while match expr.0.as_ref() {
             ExprType::Object(..) => false,
@@ -448,12 +449,10 @@ where
         Ok(expr)
     }
 
-    pub fn eval(&self) -> Result<Expr<T>, T> {
+    pub fn eval(&self) -> Result<Expr<T>> {
         let res = self.resolve()?;
         match res.0.as_ref() {
-            ExprType::Object(fields) => {
-                Ok(ExprType::Object(fields.map(|e| e.eval().unwrap())).into())
-            }
+            ExprType::Object(fields) => Ok(ExprType::Object(fields.try_map(|e| e.eval())?).into()),
             _ => Ok(res),
         }
     }
@@ -541,7 +540,7 @@ mod tests {
         )
         .unwrap()
         .bind(ExprSet::new());
-        if let Error::ScopeError(message, _) = expr.resolve().unwrap_err() {
+        if let Error::ScopeError(message) = expr.resolve().unwrap_err() {
             assert_eq!(message.as_str(), "Unknown variable invalid_var");
         } else {
             assert!(false);
