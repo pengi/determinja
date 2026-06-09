@@ -1,12 +1,15 @@
+pub mod context;
 pub mod lang;
 pub mod value;
 
-use lang::{Expr, ExprSet, ExprType, Parser as DnjParser, Result};
+use lang::{Expr, Result};
 use std::process::exit;
 use value::Value;
 
 use clap::Parser;
 use std::path::PathBuf;
+
+use crate::context::LangContext;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -17,8 +20,8 @@ struct Args {
 }
 
 fn run(args: Args) -> Result<()> {
-    let p = DnjParser::new();
-    let expr: Expr<Value> = ExprType::BoundExpr(ExprSet::new(), p.parse_file(args.input)?).into();
+    let ctx: LangContext<Value> = LangContext::new();
+    let expr: Expr<Value> = ctx.read_file(args.input)?;
     println!("input: {:#}", expr);
     expr.eval()?;
     println!("output: {:#}", expr);

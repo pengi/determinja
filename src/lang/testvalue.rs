@@ -138,6 +138,13 @@ impl ExprOps for TestValue {
         }
     }
 
+    fn as_string(&self) -> Result<String> {
+        match self {
+            TestValue::String(val) => Ok(val.clone()),
+            _ => Err(Error::Type(format!("not a string: {}", self))),
+        }
+    }
+
     fn new_from_bool(&self, value: bool) -> Self {
         TestValue::Bool(value)
     }

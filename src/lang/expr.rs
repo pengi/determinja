@@ -21,6 +21,7 @@ pub mod ops {
         fn op_neg(&self) -> Result<Self>;
         fn op_not(&self) -> Result<Self>;
         fn as_bool(&self) -> Result<bool>;
+        fn as_string(&self) -> Result<String>;
         fn new_from_bool(&self, value: bool) -> Self;
     }
 
@@ -116,7 +117,7 @@ pub enum ExprUnOp {
     Not,
 }
 
-type ExprBuiltinFn<'func, T> = dyn 'func + Fn(&'_ Expr<'func, T>) -> Result<Expr<'func, T>>;
+pub type ExprBuiltinFn<'func, T> = dyn 'func + Fn(&'_ Expr<'func, T>) -> Result<Expr<'func, T>>;
 
 #[derive(Clone)]
 pub struct ExprBuiltin<'func, T>(String, Rc<ExprBuiltinFn<'func, T>>)
@@ -357,6 +358,15 @@ where
         Ok(())
     }
 
+    pub fn eval_string(&self) -> Result<String> {
+        // Since we expect a string, we only need to resolve one level.
+        self.resolve()?;
+        match &*self.as_ref() {
+            ExprType::Value(_) => todo!(),
+            _ => Err(Error::NoValue(format!("Not a string: {}", self))),
+        }
+    }
+
     pub fn get_item(&self, name: &str) -> Result<Expr<'func, T>> {
         self.resolve()?;
         let node = self.as_ref();
@@ -587,28 +597,26 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::{super::parser::Parser, super::testvalue::TestValue, ExprType::BoundExpr};
+    use super::{super::parser::parse_str, super::testvalue::TestValue, ExprType::BoundExpr};
 
-    fn eval<'a>(p: &'a Parser, code: &str) -> Expr<'a, TestValue> {
+    fn eval<'a>(code: &str) -> Expr<'a, TestValue> {
         let expr: Expr<TestValue> =
-            ExprType::BoundExpr(ExprSet::new(), p.parse_str(code).unwrap()).into();
+            ExprType::BoundExpr(ExprSet::new(), parse_str(code).unwrap()).into();
         expr.eval().unwrap();
         expr
     }
 
     #[test]
     fn test_resolve() -> Result<()> {
-        let p = Parser::new();
-        let expr = p
-            .parse_str(
-                r#"
+        let expr = parse_str(
+            r#"
                 {
                     stuff = "hello";
                     something = "hej";
                 }
             "#,
-            )
-            .unwrap();
+        )
+        .unwrap();
         let value = expr.get_item("stuff")?;
         assert_eq!(value, Expr::from(TestValue::String("hello".into())));
         Ok(())
@@ -616,11 +624,9 @@ mod tests {
 
     #[test]
     fn test_resolve_deep() -> Result<()> {
-        let p = Parser::new();
         // This also tests "inner" as prefixed for reserved keyword "in" is ok
-        let expr = p
-            .parse_str(
-                r#"
+        let expr = parse_str(
+            r#"
                 {
                     stuff = "hello";
                     something = {
@@ -628,8 +634,8 @@ mod tests {
                     };
                 }
             "#,
-            )
-            .unwrap();
+        )
+        .unwrap();
         let value = expr.get_item("something")?.get_item("inner")?;
         assert_eq!(value, Expr::from(TestValue::Int(55)));
         Ok(())
@@ -637,9 +643,7 @@ mod tests {
 
     #[test]
     fn test_let() {
-        let p = Parser::new();
         let value = eval(
-            &p,
             r#"
                 let
                     a = 12;
@@ -653,9 +657,8 @@ mod tests {
 
     #[test]
     fn test_invalid_var() -> Result<()> {
-        let p = Parser::new();
         let expr: Expr<TestValue> =
-            ExprType::BoundExpr(ExprSet::new(), p.parse_str("invalid_var").unwrap()).into();
+            ExprType::BoundExpr(ExprSet::new(), parse_str("invalid_var").unwrap()).into();
         if let Err(Error::ScopeError(message)) = expr.resolve() {
             assert_eq!(message.as_str(), "Unknown variable invalid_var");
         } else {
@@ -666,9 +669,8 @@ mod tests {
 
     #[test]
     fn test_let_set_var() {
-        let p = Parser::new();
         assert_eq! {
-            eval(&p, r#"
+            eval(r#"
                 let
                     a = 12;
                 in
@@ -676,15 +678,14 @@ mod tests {
                     stuff = a;
                 }
             "#),
-            eval(&p, "{ stuff = 12; }"),
+            eval("{ stuff = 12; }"),
         }
     }
 
     #[test]
     fn test_let_set_var_seq() {
-        let p = Parser::new();
         assert_eq! {
-            eval(&p, r#"
+            eval(r#"
                 let
                     a = 12;
                     b = a;
@@ -693,16 +694,15 @@ mod tests {
                     stuff = b;
                 }
             "#),
-            eval(&p, "{ stuff = 12; }"),
+            eval("{ stuff = 12; }"),
         }
     }
 
     #[test]
     fn test_func_call() {
-        let p = Parser::new();
-        let func_a = p.parse_str("var: 13").unwrap();
-        let func_b = p.parse_str("var: 42").unwrap();
-        let call = p.parse_str("func_b 32").unwrap();
+        let func_a = parse_str("var: 13").unwrap();
+        let func_b = parse_str("var: 42").unwrap();
+        let call = parse_str("func_b 32").unwrap();
         let varscope =
             ExprSet::from(vec![("func_a", func_a.into()), ("func_b", func_b.into())]).unwrap();
         let value: Expr<TestValue> = ExprType::BoundExpr(varscope, call).into();
@@ -712,10 +712,9 @@ mod tests {
 
     #[test]
     fn test_func_call_var_arg() {
-        let p = Parser::new();
-        let func_var = p.parse_str("var: var").unwrap();
-        let arg_var = p.parse_str("32").unwrap();
-        let call = p.parse_str("func arg").unwrap();
+        let func_var = parse_str("var: var").unwrap();
+        let arg_var = parse_str("32").unwrap();
+        let call = parse_str("func arg").unwrap();
         let varscope =
             ExprSet::from(vec![("func", func_var.into()), ("arg", arg_var.into())]).unwrap();
         let value: Expr<TestValue> = ExprType::BoundExpr(varscope, call).into();
@@ -725,9 +724,8 @@ mod tests {
 
     #[test]
     fn test_func_call_resolved() {
-        let p = Parser::new();
         assert_eq! {
-            eval(&p,r#"
+            eval(r#"
                 let
                     a = 12;
                     func = test: {
@@ -738,15 +736,14 @@ mod tests {
                     stuff = func a;
                 }
             "#),
-            eval(&p, "{ stuff = { var = 12; }; }"),
+            eval("{ stuff = { var = 12; }; }"),
         }
     }
 
     #[test]
     fn test_func_call_bound() {
-        let p = Parser::new();
         assert_eq! {
-            eval(&p, r#"
+            eval(r#"
                 let
                     a = 12;
                     func = test: {
@@ -757,15 +754,14 @@ mod tests {
                     stuff = func 77;
                 }
             "#),
-            eval(&p, "{ stuff = { var = 12; }; }"),
+            eval("{ stuff = { var = 12; }; }"),
         }
     }
 
     #[test]
     fn test_func_call_resolved_stacked_let() {
-        let p = Parser::new();
         assert_eq! {
-            eval(&p, r#"
+            eval(r#"
                 let
                     a = 12;
                 in
@@ -778,15 +774,14 @@ mod tests {
                     stuff = func a;
                 }
             "#),
-            eval(&p, "{ stuff = { var = 12; }; }"),
+            eval("{ stuff = { var = 12; }; }"),
         }
     }
 
     #[test]
     fn test_func_call_pattern() {
-        let p = Parser::new();
         assert_eq! {
-            eval(&p, r#"
+            eval(r#"
                 let
                     a = 12;
                     b = 13;
@@ -801,15 +796,14 @@ mod tests {
                     };
                 }
             "#),
-            eval(&p, "{ stuff = { var = 74; }; }"),
+            eval("{ stuff = { var = 74; }; }"),
         }
     }
 
     #[test]
     fn test_eval() {
-        let p = Parser::new();
         assert_eq! {
-            eval(&p, r#"
+            eval(r#"
                 let
                     a = 12;
                     b = { inner = 43; };
@@ -821,67 +815,60 @@ mod tests {
                     };
                 }
             "#),
-            eval(&p, "{ app = { var = { inner = 43; }; }; }"),
+            eval("{ app = { var = { inner = 43; }; }; }"),
         }
     }
 
     #[test]
     fn test_arith() {
-        let p = Parser::new();
         assert_eq! {
-            eval(&p, "2 * 3 + 4 * 5"),
-            eval(&p, "6 + 20"),
+            eval("2 * 3 + 4 * 5"),
+            eval("6 + 20"),
         }
         assert_eq! {
-            eval(&p, "6 + 20"),
-            eval(&p, "26"),
+            eval("6 + 20"),
+            eval("26"),
         }
     }
 
     #[test]
     fn test_bool_op() {
-        let p = Parser::new();
-        assert_eq!(eval(&p, "false || 12"), eval(&p, "12"));
-        assert_eq!(eval(&p, "true || 12"), eval(&p, "true"));
-        assert_eq!(eval(&p, "false && 12"), eval(&p, "false"));
-        assert_eq!(eval(&p, "true && 12"), eval(&p, "12"));
+        assert_eq!(eval("false || 12"), eval("12"));
+        assert_eq!(eval("true || 12"), eval("true"));
+        assert_eq!(eval("false && 12"), eval("false"));
+        assert_eq!(eval("true && 12"), eval("12"));
     }
 
     #[test]
     fn test_bool_laziness() {
-        let p = Parser::new();
-        assert_eq!(eval(&p, "true || invalid_var"), eval(&p, "true"));
-        assert_eq!(eval(&p, "false && invalid_var"), eval(&p, "false"));
-        assert_eq!(eval(&p, "false -> invalid_var"), eval(&p, "true"));
+        assert_eq!(eval("true || invalid_var"), eval("true"));
+        assert_eq!(eval("false && invalid_var"), eval("false"));
+        assert_eq!(eval("false -> invalid_var"), eval("true"));
     }
 
     #[test]
     fn test_bool_implication() {
-        let p = Parser::new();
-        assert_eq!(eval(&p, "false -> false"), eval(&p, "true"));
-        assert_eq!(eval(&p, "false -> true"), eval(&p, "true"));
-        assert_eq!(eval(&p, "true -> false"), eval(&p, "false"));
-        assert_eq!(eval(&p, "true -> true"), eval(&p, "true"));
-        assert_eq!(eval(&p, "false -> 12"), eval(&p, "true"));
-        assert_eq!(eval(&p, "true -> 12"), eval(&p, "12"));
+        assert_eq!(eval("false -> false"), eval("true"));
+        assert_eq!(eval("false -> true"), eval("true"));
+        assert_eq!(eval("true -> false"), eval("false"));
+        assert_eq!(eval("true -> true"), eval("true"));
+        assert_eq!(eval("false -> 12"), eval("true"));
+        assert_eq!(eval("true -> 12"), eval("12"));
     }
 
     #[test]
     fn test_bool_not() {
-        let p = Parser::new();
-        assert_eq!(eval(&p, "!true"), eval(&p, "false"));
-        assert_eq!(eval(&p, "!false"), eval(&p, "true"));
+        assert_eq!(eval("!true"), eval("false"));
+        assert_eq!(eval("!false"), eval("true"));
     }
 
     #[test]
     fn test_bool_neg() {
-        let p = Parser::new();
-        assert_eq!(eval(&p, "let a = 5; in (-a) + 3"), eval(&p, "-2"));
+        assert_eq!(eval("let a = 5; in (-a) + 3"), eval("-2"));
     }
 
     #[test]
     fn test_func_call_laziness() {
-        let p = Parser::new();
         // The code contains an error; myfunc, which is not a function.
         // It is intentional that the func should not be evaluated, since
         // laziness in "false && ...", and therefore not be resolved as an
@@ -890,7 +877,6 @@ mod tests {
         // Test evalutes that eval is successful rather than ethe actual output
         assert_eq!(
             eval(
-                &p,
                 r#"
                 let
                     myfunc = not_a_function;
@@ -899,28 +885,26 @@ mod tests {
                     false && lazy_func_call
                 "#
             ),
-            eval(&p, "false")
+            eval("false")
         );
     }
 
     #[test]
     fn test_builtin_func() {
-        let p = Parser::new();
         let code = "mybuiltin 10";
         let builtins = ExprSet::from(vec![(
             "mybuiltin",
             Expr::new_builtin("mybuiltin", |_| Ok(Expr::from(TestValue::Int(123)))),
         )])
         .unwrap();
-        let expr: Expr<TestValue> = BoundExpr(builtins, p.parse_str(code).unwrap()).into();
+        let expr: Expr<TestValue> = BoundExpr(builtins, parse_str(code).unwrap()).into();
         expr.eval().unwrap();
-        assert_eq!(expr, eval(&p, "123"));
+        assert_eq!(expr, eval("123"));
     }
 
     #[test]
     fn test_builtin_func_laziness_multiple_calls() {
         // Invoked in code twice should only be evaluated once
-        let p = Parser::new();
         let code = r#"
             let
                 func_call = mybuiltin 10;
@@ -941,16 +925,15 @@ mod tests {
             }),
         )])
         .unwrap();
-        let expr: Expr<TestValue> = BoundExpr(builtins, p.parse_str(code).unwrap()).into();
+        let expr: Expr<TestValue> = BoundExpr(builtins, parse_str(code).unwrap()).into();
         expr.eval().unwrap();
-        assert_eq!(expr, eval(&p, "{ a = 1; b = 1; }"));
+        assert_eq!(expr, eval("{ a = 1; b = 1; }"));
         assert_eq!(*call_count.borrow(), 1);
     }
 
     #[test]
     fn test_builtin_func_laziness_no_calls() {
         // Invoked in code twice should only be evaluated once
-        let p = Parser::new();
         let code = r#"
             let
                 func_call = mybuiltin 10;
@@ -968,9 +951,9 @@ mod tests {
             }),
         )])
         .unwrap();
-        let expr: Expr<TestValue> = BoundExpr(builtins, p.parse_str(code).unwrap()).into();
+        let expr: Expr<TestValue> = BoundExpr(builtins, parse_str(code).unwrap()).into();
         expr.eval().unwrap();
-        assert_eq!(expr, eval(&p, "{}"));
+        assert_eq!(expr, eval("{}"));
         assert_eq!(*call_count.borrow(), 0);
     }
 }
