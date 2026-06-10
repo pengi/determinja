@@ -131,6 +131,7 @@ Expr1: Expr<T> = {
 
 ExprTerm: Expr<T> = {
     <Object>,
+    <List>,
     <Value>,
     <Let>,
     <Variable>,
@@ -138,6 +139,8 @@ ExprTerm: Expr<T> = {
 };
 
 Object: Expr<T> = "{" <s:SetStmt*> "}" => ExprType::Object(ExprSet::from(s).unwrap()).into();
+
+List: Expr<T> = "[" <s:ExprTerm*> "]" => ExprType::List(s).into();
 
 
 Let: Expr<T> = "let" <s:SetStmt*> "in" <e:ExprTerm> => ExprType::Let(s, e).into();

@@ -161,6 +161,7 @@ where
     T: Clone + PartialEq + Display + ExprOps,
 {
     Object(ExprSet<T>),
+    List(Vec<Expr<T>>),
     AttrSel(Expr<T>, String),
     Value(T),
     Var(String),
@@ -235,6 +236,14 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ExprType::Object(varscope) => varscope.fmt(f),
+            ExprType::List(items) => {
+                write!(f, "[")?;
+                for item in items.iter() {
+                    write!(f, " {}", item)?;
+                }
+                write!(f, "]")?;
+                Ok(())
+            }
             ExprType::AttrSel(val, attr) => write!(f, "{}.{}", val, attr),
             ExprType::Value(val) => val.fmt(f),
             ExprType::Var(val) => Display::fmt(&val, f),
@@ -350,6 +359,7 @@ where
 
         while match *expr {
             ExprType::Object(..) => false,
+            ExprType::List(..) => false,
             ExprType::AttrSel(..) => true,
             ExprType::Value(..) => false,
             ExprType::Var(..) => true,
@@ -366,6 +376,11 @@ where
         }
 
         Ok(())
+    }
+
+    fn res_type(&self) -> Result<Ref<'_, ExprType<T>>> {
+        self.resolve()?;
+        Ok(self.as_ref())
     }
 
     pub fn eval(&self) -> Result<()> {
@@ -414,6 +429,12 @@ where
                         ExprType::BoundExpr(varspace.clone(), val.clone()).into()
                     })))
                 }
+                ExprType::List(items) => Ok(ExprType::List(
+                    items
+                        .iter()
+                        .map(|item| ExprType::BoundExpr(varspace.clone(), item.clone()).into())
+                        .collect(),
+                )),
                 ExprType::AttrSel(val, attr) => Ok(ExprType::AttrSel(
                     ExprType::BoundExpr(varspace.clone(), val.clone()).into(),
                     attr.clone(),
@@ -448,10 +469,7 @@ where
                 }
                 ExprType::FuncDefBuiltin(_expr_builtin) => todo!(),
                 ExprType::Var(name) => match &varspace.get(name) {
-                    Some(value) => {
-                        value.resolve()?;
-                        Ok(value.as_ref().clone())
-                    }
+                    Some(value) => Ok(value.res_type()?.clone()),
                     None => Err(Error::Scope(format!(
                         "Unknown variable {} in {}",
                         name, varspace
@@ -481,9 +499,7 @@ where
             }
             ExprType::FuncCall(fexpr, fargs) => {
                 fargs.resolve()?;
-                fexpr.resolve()?;
-                let funcref = fexpr.as_ref();
-                let (args, func_expr): (ExprSet<T>, Expr<T>) = match &*funcref {
+                let (args, func_expr): (ExprSet<T>, Expr<T>) = match &*fexpr.res_type()? {
                     ExprType::FuncDefIdent(arg_name, func_expr) => {
                         Ok((ExprSet::single(arg_name, fargs.clone()), func_expr.clone()))
                     }
@@ -499,10 +515,7 @@ where
                         let res = funcrc.as_ref().call(fargs.clone())?;
                         Ok((ExprSet::new(), res))
                     }
-                    _ => Err(Error::Scope(format!(
-                        "called func, but it's a {}",
-                        fexpr
-                    ))),
+                    _ => Err(Error::Scope(format!("called func, but it's a {}", fexpr))),
                 }?;
 
                 // If function contains a bound scope, it should still apply,
@@ -528,85 +541,52 @@ where
                     },
                 }
             }
-            ExprType::BinOp(op, lhs, rhs) => {
-                lhs.resolve()?;
-                match &*lhs.as_ref() {
-                    ExprType::Object(lhs_obj) => todo!("Binop on {}", lhs_obj),
-                    ExprType::Value(lhs_val) => match op {
-                        ExprBinOp::LogAnd => match lhs_val.as_bool()? {
-                            true => {
-                                rhs.resolve()?;
-                                Ok(rhs.as_ref().clone())
-                            }
-                            false => Ok(ExprType::Value(lhs_val.new_from_bool(false))),
-                        },
-                        ExprBinOp::LogOr => match lhs_val.as_bool()? {
-                            true => Ok(ExprType::Value(lhs_val.new_from_bool(true))),
-                            false => {
-                                rhs.resolve()?;
-                                Ok(rhs.as_ref().clone())
-                            }
-                        },
-                        ExprBinOp::LogImpl => match lhs_val.as_bool()? {
-                            false => Ok(ExprType::Value(lhs_val.new_from_bool(true))),
-                            true => {
-                                rhs.resolve()?;
-                                Ok(rhs.as_ref().clone())
-                            }
-                        },
-                        _ => {
-                            rhs.resolve()?;
-                            match &*rhs.as_ref() {
-                                ExprType::Object(_rhs_obj) => todo!(),
-                                ExprType::Value(rhs_val) => match op {
-                                    ExprBinOp::HasAttr => todo!(),
-                                    ExprBinOp::ListConcat => todo!(),
-                                    ExprBinOp::Mult => {
-                                        Ok(ExprType::Value(T::op_mult(lhs_val, rhs_val)?))
-                                    }
-                                    ExprBinOp::Div => {
-                                        Ok(ExprType::Value(T::op_div(lhs_val, rhs_val)?))
-                                    }
-                                    ExprBinOp::Sub => {
-                                        Ok(ExprType::Value(T::op_sub(lhs_val, rhs_val)?))
-                                    }
-                                    ExprBinOp::Add => {
-                                        Ok(ExprType::Value(T::op_add(lhs_val, rhs_val)?))
-                                    }
-                                    ExprBinOp::Update => todo!(),
-                                    ExprBinOp::Lt => {
-                                        Ok(ExprType::Value(T::op_lt(lhs_val, rhs_val)?))
-                                    }
-                                    ExprBinOp::Le => {
-                                        Ok(ExprType::Value(T::op_le(lhs_val, rhs_val)?))
-                                    }
-                                    ExprBinOp::Gt => {
-                                        Ok(ExprType::Value(T::op_gt(lhs_val, rhs_val)?))
-                                    }
-                                    ExprBinOp::Ge => {
-                                        Ok(ExprType::Value(T::op_ge(lhs_val, rhs_val)?))
-                                    }
-                                    ExprBinOp::Eq => {
-                                        Ok(ExprType::Value(T::op_eq(lhs_val, rhs_val)?))
-                                    }
-                                    ExprBinOp::Neq => {
-                                        Ok(ExprType::Value(T::op_neq(lhs_val, rhs_val)?))
-                                    }
-                                    _ => unreachable!(),
-                                },
-                                typ => Err(Error::Eval(format!(
-                                    "Resolving unresolvable type {}",
-                                    typ
-                                ))),
-                            }
-                        }
+            ExprType::BinOp(op, lhs, rhs) => match &*lhs.res_type()? {
+                ExprType::Object(lhs_obj) => todo!("Binop on {}", lhs_obj),
+                ExprType::List(lhs_list) => match (op, &*rhs.res_type()?) {
+                    (ExprBinOp::Add, ExprType::List(rhs_list)) => {
+                        let mut res = lhs_list.clone();
+                        res.extend(rhs_list.iter().cloned());
+                        Ok(ExprType::List(res))
+                    }
+                    _ => todo!("error message"),
+                },
+                ExprType::Value(lhs_val) => match op {
+                    ExprBinOp::LogAnd => match lhs_val.as_bool()? {
+                        true => Ok(rhs.res_type()?.clone()),
+                        false => Ok(ExprType::Value(lhs_val.new_from_bool(false))),
                     },
-                    typ => Err(Error::Eval(format!(
-                        "Resolving unresolvable type {}",
-                        typ
-                    ))),
-                }
-            }
+                    ExprBinOp::LogOr => match lhs_val.as_bool()? {
+                        true => Ok(ExprType::Value(lhs_val.new_from_bool(true))),
+                        false => Ok(rhs.res_type()?.clone()),
+                    },
+                    ExprBinOp::LogImpl => match lhs_val.as_bool()? {
+                        false => Ok(ExprType::Value(lhs_val.new_from_bool(true))),
+                        true => Ok(rhs.res_type()?.clone()),
+                    },
+                    _ => match &*rhs.res_type()? {
+                        ExprType::Object(_rhs_obj) => todo!(),
+                        ExprType::Value(rhs_val) => match op {
+                            ExprBinOp::HasAttr => todo!(),
+                            ExprBinOp::ListConcat => todo!(),
+                            ExprBinOp::Mult => Ok(ExprType::Value(T::op_mult(lhs_val, rhs_val)?)),
+                            ExprBinOp::Div => Ok(ExprType::Value(T::op_div(lhs_val, rhs_val)?)),
+                            ExprBinOp::Sub => Ok(ExprType::Value(T::op_sub(lhs_val, rhs_val)?)),
+                            ExprBinOp::Add => Ok(ExprType::Value(T::op_add(lhs_val, rhs_val)?)),
+                            ExprBinOp::Update => todo!(),
+                            ExprBinOp::Lt => Ok(ExprType::Value(T::op_lt(lhs_val, rhs_val)?)),
+                            ExprBinOp::Le => Ok(ExprType::Value(T::op_le(lhs_val, rhs_val)?)),
+                            ExprBinOp::Gt => Ok(ExprType::Value(T::op_gt(lhs_val, rhs_val)?)),
+                            ExprBinOp::Ge => Ok(ExprType::Value(T::op_ge(lhs_val, rhs_val)?)),
+                            ExprBinOp::Eq => Ok(ExprType::Value(T::op_eq(lhs_val, rhs_val)?)),
+                            ExprBinOp::Neq => Ok(ExprType::Value(T::op_neq(lhs_val, rhs_val)?)),
+                            _ => unreachable!(),
+                        },
+                        typ => Err(Error::Eval(format!("Resolving unresolvable type {}", typ))),
+                    },
+                },
+                typ => Err(Error::Eval(format!("Resolving unresolvable type {}", typ))),
+            },
             typ => unreachable!("Resolving {}", typ),
         }
     }
@@ -942,6 +922,11 @@ mod tests {
             eval("let lib = { func = a: a+3; }; in (lib.func 7)"),
             eval("10")
         );
+    }
+
+    #[test]
+    fn test_list_concat() {
+        assert_eq!(eval("[1 3 5 7] + [2 4 6 8]"), eval("[1 3 5 7 2 4 6 8]"));
     }
 
     #[test]
